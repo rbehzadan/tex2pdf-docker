@@ -1,0 +1,21 @@
+services:
+  app:
+    image: rbehzadan/tex2pdf
+    container_name: tex2pdf
+    ports:
+      - "8000:8000"
+    environment:
+      - ALLOWED_API_KEYS=1234,5678,abcd  # Comma-separated list of allowed API keys
+      - API_KEY_REQUIRED=true            # Set to "false" to disable API key validation
+      - MAX_WORKERS=4                    # Number of uvicorn workers
+      - MAX_UPLOAD_SIZE=52428800         # 50MB in bytes
+      - MAX_COMPILATION_TIME=240         # Maximum LaTeX compilation time in seconds
+      - RATE_LIMIT_WINDOW=60             # Rate limiting window in seconds
+      - MAX_REQUESTS_PER_WINDOW=10       # Maximum requests per rate limit window
+      - JOB_EXPIRY=3600                  # Job expiry time in seconds (1 hour)
+    volumes:
+      - pdf_data:/data
+    restart: unless-stopped
+
+volumes:
+  pdf_data:
