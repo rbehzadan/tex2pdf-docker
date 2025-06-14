@@ -293,6 +293,30 @@ def get_pdf(job_id: str) -> Optional[bytes]:
             return f.read()
     return None
 
+def resolve_work_directory(extract_path: str, main_file: str = "main.tex") -> str:
+    """
+    Determines the actual directory containing the main LaTeX file.
+    Returns the path to the directory where compilation should run.
+    """
+    extract_path = Path(extract_path)
+
+    # Case 1: main.tex is at root
+    root_main = extract_path / main_file
+    if root_main.exists():
+        return str(extract_path)
+
+    # Case 2: exactly one folder at top level and it contains main.tex
+    top_level = list(extract_path.iterdir())
+    if len(top_level) == 1 and top_level[0].is_dir():
+        candidate = top_level[0] / main_file
+        if candidate.exists():
+            logger.info(f"Using inner folder for compilation: {top_level[0]}")
+            return str(top_level[0])
+
+    raise FileNotFoundError(
+        f"'{main_file}' not found at root or in a single top-level subdirectory"
+    )
+
 async def compile_latex(
     job_id: str,
     work_dir: str,
@@ -302,6 +326,16 @@ async def compile_latex(
 ):
     """Compile LaTeX document with proper error handling and multiple runs if needed."""
     results = []
+
+    try:
+        work_dir = resolve_work_directory(work_dir, main_file)
+    except FileNotFoundError as e:
+        update_job(job_id, {
+            "status": "failed",
+            "error": str(e)
+        })
+        return False
+
     main_tex_path = os.path.join(work_dir, main_file)
 
     # Verify the main file exists
