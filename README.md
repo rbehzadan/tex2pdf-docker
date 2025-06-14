@@ -10,7 +10,7 @@ A high-performance, secure REST API for converting LaTeX documents to PDF format
 - **Flexible ZIP Layout**: Supports `main.tex` either at the root or inside a single top-level folder (e.g., GitHub or Overleaf exports)
 - **Robust Error Handling**: Detailed error messages with LaTeX compilation logs
 - **Automatic Cleanup**: Background process removes expired PDFs and temporary files
-- **Configurable Options**: Multiple compilation runs, BibTeX support, custom main file name
+- **Configurable Options**: custom main file name
 - **API Key Authentication**: Optional security layer with configurable API keys
 - **Rate Limiting**: Protection against API abuse
 - **Resource Control**: Limits on file sizes and compilation time
@@ -97,20 +97,21 @@ Response:
 
 ### Compilation Options
 
-You can customize the LaTeX compilation process:
+You can specify the main LaTeX file if it's not named `main.tex`:
 
 ```bash
 curl -X POST \
   -H "X-API-Key: 1234" \
   -F "zip_file=@my_latex_files.zip" \
-  -F "options={\"main_file\": \"document.tex\", \"num_runs\": 3, \"use_bibtex\": true}" \
+  -F "options={\"main_file\": \"document.tex\"}" \
   http://localhost:8000/tex2pdf
 ```
 
-Options:
-- `main_file`: Main LaTeX file to compile (default: `main.tex`)
-- `num_runs`: Number of compilation runs (default: 2)
-- `use_bibtex`: Run BibTeX for bibliography processing (default: false)
+Option:
+
+* `main_file`: Name of the main LaTeX file to compile (default: `main.tex`)
+
+ℹ️ The service now uses `latexmk` for automatic multiple runs and bibliography support, so you no longer need to set `num_runs` or `use_bibtex`.
 
 ## ZIP File Requirements
 
