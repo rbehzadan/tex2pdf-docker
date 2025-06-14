@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, BackgroundTasks, Request
+from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, BackgroundTasks, Request, Form
 from fastapi.responses import StreamingResponse, FileResponse
 from io import BytesIO
 import asyncio
@@ -323,129 +323,113 @@ async def compile_latex(
     main_file: str,
     num_runs: int,
     use_bibtex: bool
-):
-    """Compile LaTeX document with proper error handling and multiple runs if needed."""
-    results = []
+) -> bool:
+    """Compile LaTeX document with proper error handling and multiple runs including BibTeX."""
 
     try:
         work_dir = resolve_work_directory(work_dir, main_file)
     except FileNotFoundError as e:
-        update_job(job_id, {
-            "status": "failed",
-            "error": str(e)
-        })
+        update_job(job_id, {"status": "failed", "error": str(e)})
         return False
 
     main_tex_path = os.path.join(work_dir, main_file)
-
-    # Verify the main file exists
     if not os.path.exists(main_tex_path):
-        logger.error(f"Main LaTeX file not found: {main_tex_path}")
         update_job(job_id, {
             "status": "failed",
             "error": f"Main LaTeX file ({main_file}) not found in the archive."
         })
         return False
 
-    # List directory contents for debugging
     logger.info(f"Work directory contents: {os.listdir(work_dir)}")
+    results = []
+
+    def extract_latex_errors(stdout: str) -> str:
+        lines = [
+            line for line in stdout.split('\n')
+            if ":" in line and ("Error" in line or "Fatal" in line)
+        ]
+        return f"LaTeX errors: {' | '.join(lines[:3])}" if lines else "LaTeX compilation failed"
+
+    async def run_pdflatex_pass(pass_num: int) -> Optional[dict]:
+        update_job(job_id, {"status": "processing", "progress": f"LaTeX compilation pass {pass_num}"})
+        cmd = ['pdflatex', '-interaction=nonstopmode', '-file-line-error', main_file]
+        return await run_latex_command(cmd, cwd=work_dir)
 
     try:
-        # Run pdflatex multiple times as needed
-        for i in range(num_runs):
-            update_job(job_id, {
-                "status": "processing",
-                "progress": f"LaTeX compilation {i+1}/{num_runs}"
-            })
+        pass_count = 0
+        for _ in range(num_runs):
+            pass_count += 1
+            result = await run_pdflatex_pass(pass_count)
+            results.append(result)
 
-            # For verbose output to diagnose issues
-            cmd = [
-                'pdflatex',
-                '-interaction=nonstopmode',
-                '-file-line-error',
-                main_file
-            ]
+            if result["returncode"] != 0:
+                update_job(job_id, {
+                    "status": "failed",
+                    "error": extract_latex_errors(result["stdout"]),
+                    "details": json.dumps(result)
+                })
+                return False
 
-            try:
-                result = await run_latex_command(cmd, cwd=work_dir)
-                results.append(result)
+            # Only run BibTeX after the first successful pass
+            if use_bibtex and pass_count == 1:
+                update_job(job_id, {"status": "processing", "progress": "Running BibTeX"})
+                basename = os.path.splitext(main_file)[0]
+                bibtex_result = await run_latex_command(['bibtex', basename], cwd=work_dir)
+                results.append(bibtex_result)
 
-                # If compilation failed, stop and provide details
-                if result["returncode"] != 0:
-                    # Extract relevant error messages
-                    error_lines = []
-                    for line in result["stdout"].split('\n'):
-                        if ":" in line and ("Error" in line or "Fatal" in line):
-                            error_lines.append(line)
-
-                    error_message = "LaTeX compilation failed"
-                    if error_lines:
-                        error_message = f"LaTeX errors: {' | '.join(error_lines[:3])}"
-
+                if bibtex_result["returncode"] != 0:
                     update_job(job_id, {
                         "status": "failed",
-                        "error": error_message,
+                        "error": "BibTeX failed",
+                        "details": json.dumps(bibtex_result)
+                    })
+                    return False
+
+                # Always do at least two extra pdflatex after BibTeX
+                pass_count += 1
+                result = await run_pdflatex_pass(pass_count)
+                results.append(result)
+                if result["returncode"] != 0:
+                    update_job(job_id, {
+                        "status": "failed",
+                        "error": extract_latex_errors(result["stdout"]),
                         "details": json.dumps(result)
                     })
                     return False
 
-                # Run bibtex if requested (after the first pdflatex run)
-                if use_bibtex and i == 0:
+                pass_count += 1
+                result = await run_pdflatex_pass(pass_count)
+                results.append(result)
+                if result["returncode"] != 0:
                     update_job(job_id, {
-                        "status": "processing",
-                        "progress": "Running BibTeX"
+                        "status": "failed",
+                        "error": extract_latex_errors(result["stdout"]),
+                        "details": json.dumps(result)
                     })
+                    return False
 
-                    basename = os.path.splitext(main_file)[0]
-                    bibtex_cmd = ['bibtex', basename]
-
-                    bibtex_result = await run_latex_command(bibtex_cmd)
-                    results.append(bibtex_result)
-
-            except TimeoutError as e:
-                logger.error(f"Timeout during compilation: {str(e)}")
-                update_job(job_id, {
-                    "status": "failed",
-                    "error": str(e)
-                })
-                return False
-            except Exception as e:
-                logger.error(f"Unexpected error during compilation: {str(e)}", exc_info=True)
-                update_job(job_id, {
-                    "status": "failed",
-                    "error": f"Unexpected error: {str(e)}"
-                })
-                return False
-
-        # Check if the PDF was generated
-        pdf_basename = os.path.splitext(main_file)[0]
-        pdf_path = os.path.join(work_dir, f"{pdf_basename}.pdf")
-
+        # Final output check
+        pdf_path = os.path.join(work_dir, f"{os.path.splitext(main_file)[0]}.pdf")
         if not os.path.exists(pdf_path):
-            logger.error(f"PDF not generated at expected path: {pdf_path}")
             update_job(job_id, {
                 "status": "failed",
                 "error": "PDF file not generated despite successful compilation"
             })
             return False
 
-        # Store the PDF in the filesystem
         with open(pdf_path, 'rb') as f:
-            pdf_content = f.read()
-            store_pdf(job_id, pdf_content)
+            store_pdf(job_id, f.read())
 
-        # Update job status
-        update_job(job_id, {
-            "status": "completed",
-        })
+        update_job(job_id, {"status": "completed"})
         return True
 
+    except TimeoutError as e:
+        update_job(job_id, {"status": "failed", "error": str(e)})
+        return False
+
     except Exception as e:
-        logger.error(f"Exception in compile_latex: {str(e)}", exc_info=True)
-        update_job(job_id, {
-            "status": "failed",
-            "error": f"Unexpected error: {str(e)}"
-        })
+        logger.error(f"Unexpected error during LaTeX compilation: {e}", exc_info=True)
+        update_job(job_id, {"status": "failed", "error": f"Unexpected error: {str(e)}"})
         return False
 
 # Clean up old jobs (runs in background)
@@ -496,7 +480,9 @@ async def convert_to_pdf(
     background_tasks: BackgroundTasks,
     request: Request,
     zip_file: UploadFile = File(...),
-    options: Optional[ConversionOptions] = None
+    # options: Optional[ConversionOptions] = None
+    options: str = Form('{}')  # Accept raw JSON string from form
+
 ):
     """
     Takes a zip file containing LaTeX files and compiles them into a PDF.
@@ -508,6 +494,12 @@ async def convert_to_pdf(
     api_key = verify_api_key(request)
     start_time = time.time()
     job_id = str(uuid.uuid4())
+
+    try:
+        options = ConversionOptions.parse_raw(options)
+    except ValidationError as e:
+        logger.error(f"Invalid options JSON: {e}")
+        raise HTTPException(status_code=422, detail="Invalid options format")
 
     if options is None:
         options = ConversionOptions()
