@@ -7,6 +7,7 @@ A high-performance, secure REST API for converting LaTeX documents to PDF format
 - **Simple API**: Upload a ZIP file containing LaTeX documents and get a PDF back
 - **Secure Processing**: Comprehensive security measures including input validation and sanitization
 - **Multiple Workers**: Designed for concurrency with shared file system and SQLite database
+- **Flexible ZIP Layout**: Supports `main.tex` either at the root or inside a single top-level folder (e.g., GitHub or Overleaf exports)
 - **Robust Error Handling**: Detailed error messages with LaTeX compilation logs
 - **Automatic Cleanup**: Background process removes expired PDFs and temporary files
 - **Configurable Options**: Multiple compilation runs, BibTeX support, custom main file name
@@ -114,7 +115,9 @@ Options:
 ## ZIP File Requirements
 
 - The ZIP file must contain all necessary files for LaTeX compilation
-- By default, the service looks for `main.tex` as the main file
+- The service looks for `main.tex` (or your specified `main_file`) either:
+  - At the root of the ZIP file, **or**
+  - Inside a single top-level folder (e.g., `myproject/main.tex`)
 - All referenced files (images, styles, etc.) should be included
 - Paths in LaTeX files should be relative and match the ZIP structure
 
