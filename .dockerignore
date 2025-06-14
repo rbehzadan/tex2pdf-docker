@@ -8,3 +8,5 @@ logs
 Dockerfile
 README.md
 docker-compose.yaml
+scripts
+tests
